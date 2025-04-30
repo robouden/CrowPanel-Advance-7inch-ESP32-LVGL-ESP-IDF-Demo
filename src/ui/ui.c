@@ -8,31 +8,6 @@
 
 ///////////////////// VARIABLES ////////////////////
 
-// SCREEN: ui_ScreenTest
-void ui_ScreenTest_screen_init(void);
-void ui_event_ScreenTest(lv_event_t * e);
-lv_obj_t * ui_ScreenTest;
-lv_obj_t * ui_Panel1;
-lv_obj_t * ui_LabelHelloWorld;
-lv_obj_t * ui_LabelTime;
-lv_obj_t * ui_Panel2;
-void ui_event_SliderHours(lv_event_t * e);
-lv_obj_t * ui_SliderHours;
-lv_obj_t * ui_LabelHours;
-lv_obj_t * ui_Panel3;
-void ui_event_SliderMinutes(lv_event_t * e);
-lv_obj_t * ui_SliderMinutes;
-lv_obj_t * ui_LabelMinutes;
-lv_obj_t * ui_Panel4;
-void ui_event_SliderSeconds(lv_event_t * e);
-lv_obj_t * ui_SliderSeconds;
-lv_obj_t * ui_LabelSeconds;
-lv_obj_t * ui_Panel5;
-void ui_event_SetTime(lv_event_t * e);
-lv_obj_t * ui_SetTime;
-lv_obj_t * ui_Label2;
-// CUSTOM VARIABLES
-lv_obj_t * uic_SetTime;
 
 // EVENTS
 lv_obj_t * ui____initial_actions0;
@@ -49,51 +24,6 @@ lv_obj_t * ui____initial_actions0;
 
 ///////////////////// ANIMATIONS ////////////////////
 
-///////////////////// FUNCTIONS ////////////////////
-void ui_event_ScreenTest(lv_event_t * e)
-{
-    lv_event_code_t event_code = lv_event_get_code(e);
-
-    if(event_code == LV_EVENT_SCREEN_LOADED) {
-        event_screen_init(e);
-    }
-}
-
-void ui_event_SliderHours(lv_event_t * e)
-{
-    lv_event_code_t event_code = lv_event_get_code(e);
-
-    if(event_code == LV_EVENT_VALUE_CHANGED) {
-        event_slider_set_hours(e);
-    }
-}
-
-void ui_event_SliderMinutes(lv_event_t * e)
-{
-    lv_event_code_t event_code = lv_event_get_code(e);
-
-    if(event_code == LV_EVENT_VALUE_CHANGED) {
-        event_slider_set_minutes(e);
-    }
-}
-
-void ui_event_SliderSeconds(lv_event_t * e)
-{
-    lv_event_code_t event_code = lv_event_get_code(e);
-
-    if(event_code == LV_EVENT_VALUE_CHANGED) {
-        event_slider_set_seconds(e);
-    }
-}
-
-void ui_event_SetTime(lv_event_t * e)
-{
-    lv_event_code_t event_code = lv_event_get_code(e);
-
-    if(event_code == LV_EVENT_CLICKED) {
-        event_set_time(e);
-    }
-}
 
 ///////////////////// SCREENS ////////////////////
 
@@ -103,7 +33,7 @@ void ui_init(void)
     lv_theme_t * theme = lv_theme_default_init(dispp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_RED),
                                                false, LV_FONT_DEFAULT);
     lv_disp_set_theme(dispp, theme);
-    ui_ScreenTest_screen_init();
+    // ui_ScreenTest_screen_init();
     ui____initial_actions0 = lv_obj_create(NULL);
-    lv_disp_load_scr(ui_ScreenTest);
+    // lv_disp_load_scr(ui_ScreenTest);
 }
