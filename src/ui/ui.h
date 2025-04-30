@@ -12,8 +12,8 @@ extern "C" {
 
 #include "lvgl.h"
 
-#include "ui_helpers.h"
-#include "ui_events.h"
+// #include "ui_helpers.h"
+// #include "ui_events.h"
 
 
 extern lv_obj_t * ui____initial_actions0;
