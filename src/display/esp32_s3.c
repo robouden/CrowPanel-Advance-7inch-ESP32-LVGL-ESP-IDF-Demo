@@ -298,29 +298,27 @@ void init_backlight(pca9557_handle_t expander_handle) {
  * @param[in] touch_handle Handle to the touchpad device associated with LVGL.
  */
 void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch_handle) {
-
     ESP_LOGI(TAG, "Initialize LVGL library");
-
+    
     lvgl_mux = xSemaphoreCreateMutex();
-
-    static lv_disp_draw_buf_t disp_buf; // contains internal graphic buffer(s) called draw buffer(s)
-    static lv_disp_drv_t disp_drv;      // contains callback functions
+    
+    static lv_disp_draw_buf_t disp_buf;
+    static lv_disp_drv_t disp_drv;
     
     lv_init();
-
+    
     void *buf1 = NULL;
     void *buf2 = NULL;
 
     #if CONFIG_DOUBLE_FB
         ESP_LOGI(TAG, "Use frame buffers as LVGL draw buffers");
         ESP_ERROR_CHECK(esp_lcd_rgb_panel_get_frame_buffer(panel_handle, 2, &buf1, &buf2));
-        // initialize LVGL draw buffers
         lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * LCD_V_RES);
     #else
         ESP_LOGI(TAG, "Allocate separate LVGL draw buffers from PSRAM");
-        buf1 = heap_caps_malloc(LCD_H_RES * 10 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-        // initialize LVGL draw buffers
-        lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * 10);
+        buf1 = heap_caps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);  // Increased from 10 to 40 lines
+        buf2 = heap_caps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);  // Added second buffer
+        lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * 40);  // Using both buffers
     #endif 
 
     ESP_LOGI(TAG, "Register display driver to LVGL");
@@ -330,11 +328,12 @@ void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch
     disp_drv.flush_cb = lvgl_flush_cb;
     disp_drv.draw_buf = &disp_buf;
     disp_drv.user_data = panel_handle;
+    disp_drv.monitor_cb = NULL;  // Disable performance monitoring
     #if CONFIG_DOUBLE_FB
-        disp_drv.full_refresh = true; // the full_refresh mode can maintain the synchronization between the two frame buffers
+        disp_drv.full_refresh = true;
     #endif
     lv_disp_drv_register(&disp_drv);
-
+    
     ESP_LOGI(TAG, "Register input device driver to LVGL");
     static lv_indev_drv_t indev_drv;
     lv_indev_drv_init(&indev_drv);
@@ -342,10 +341,9 @@ void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch
     indev_drv.read_cb = touchpad_read;
     indev_drv.user_data = touch_handle;
     lv_indev_drv_register(&indev_drv);
-
+    
     ESP_LOGI(TAG, "Start lv_timer_handler task");
-
-    xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL, 1);
+    xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", 4096, NULL, 2, NULL, 1);  // Increased priority
 }
 
 /**
@@ -393,7 +391,7 @@ static void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
 static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
 {
     esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) drv->user_data;
-
+    
     int offsetx1 = area->x1;
     int offsetx2 = area->x2;
     int offsety1 = area->y1;
@@ -401,11 +399,10 @@ static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
 
     // LVGL has finished
     xSemaphoreGive(sem_gui_ready);
-    // Now wait for the VSYNC event. 
-    xSemaphoreTake(sem_vsync_end, portMAX_DELAY);
-
-    // pass the draw buffer to the driver
-    esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+    // Now wait for the VSYNC event with timeout
+    if (xSemaphoreTake(sem_vsync_end, pdMS_TO_TICKS(100)) == pdTRUE) {
+        esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+    }
     lv_disp_flush_ready(drv);
 }
 
@@ -448,14 +445,12 @@ static bool on_vsync_event(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel
 static void lvgl_port_task(void *arg)
 {
     ESP_LOGI(TAG, "Starting LVGL task");
-
     while (1) {
-
-        xSemaphoreTake(lvgl_mux, portMAX_DELAY);
-        lv_timer_handler();
-        xSemaphoreGive(lvgl_mux);
-
-        vTaskDelay(pdMS_TO_TICKS(LVGL_TASK_DELAY_MS));
+        if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(100)) == pdTRUE) {
+            lv_timer_handler();
+            xSemaphoreGive(lvgl_mux);
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));  // Reduced from 10 to 5ms for smoother updates
     }
 }
 
