@@ -20,6 +20,9 @@ enum FlowGlobalVariables {
 
 // Native global variables
 
+extern const char *get_var_label_count_value();
+extern void set_var_label_count_value(const char *value);
+extern void increment_label_count();
 
 
 #ifdef __cplusplus
