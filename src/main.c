@@ -5,9 +5,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include "display/esp32_s3.h"
 #include "lvgl.h"
+#include "ui/ui_init.h"
 
 static const char *TAG = "MAIN";
 
@@ -54,24 +56,31 @@ static void touch_debug_task(void *pvParameters) {
     }
 }
 
+// LVGL update task
+static void lvgl_update_task(void *pvParameters) {
+    while (1) {
+        // Take the LVGL mutex
+        if (xSemaphoreTake(lvgl_mux, portMAX_DELAY) == pdTRUE) {
+            ui_app_update();  // Update the UI
+            xSemaphoreGive(lvgl_mux);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));  // 10ms delay
+    }
+}
+
 void app_main(void)
 {
     // Initialize display
     init_display();
 
-    // Create a black screen
-    lv_obj_t *screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
-    lv_disp_load_scr(screen);
+    // Initialize the UI
+    ui_app_init();
 
-      lv_obj_t * label = lv_label_create(screen);
-    lv_label_set_text(label, "Hello World!");
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_42, 0);  // Using largest available font
-    lv_obj_center(label);
-
-    ESP_LOGI(TAG, "Display initialized");
+    ESP_LOGI(TAG, "Display and UI initialized");
 
     // Create touch debug task with higher stack size and priority
     xTaskCreatePinnedToCore(touch_debug_task, "touch_debug", 8192, NULL, 2, NULL, 0);
+    
+    // Create LVGL update task
+    xTaskCreatePinnedToCore(lvgl_update_task, "lvgl_update", 4096, NULL, 1, NULL, 1);
 }

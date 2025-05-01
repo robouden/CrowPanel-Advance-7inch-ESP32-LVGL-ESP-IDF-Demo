@@ -1,6 +1,22 @@
 # This file was automatically generated for projects
 # without default 'CMakeLists.txt' file.
 
-FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
+FILE(GLOB ui_sources 
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui/*.c
+)
 
-idf_component_register(SRCS ${app_sources})
+FILE(GLOB display_sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/display/*.c
+)
+
+idf_component_register(
+    SRCS 
+        "main.c"
+        ${ui_sources}
+        ${display_sources}
+    INCLUDE_DIRS 
+        "."
+        "ui"
+        "../.pio/libdeps/dev/lvgl/src"
+        "display"
+)
