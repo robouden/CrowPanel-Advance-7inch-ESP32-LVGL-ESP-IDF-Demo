@@ -3,10 +3,6 @@
 
 #include <lvgl.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *click_count_up;
@@ -30,10 +26,5 @@ void tick_screen_main();
 
 void create_screens();
 void tick_screen(int screen_index);
-
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /*EEZ_LVGL_UI_SCREENS_H*/

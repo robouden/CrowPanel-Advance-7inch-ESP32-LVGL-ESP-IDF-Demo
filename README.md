@@ -1,14 +1,26 @@
-# ESP32-S3 LVGL Display Project
+# CrowPanel Advance 7" ESP32-S3 LVGL Demo
 
 This project implements a display interface using LVGL (Light and Versatile Graphics Library) on an ESP32-S3 microcontroller. It's designed to work with the CrowPanel Advance 7-inch display.
+
+## Framework Migration
+
+This project has been migrated from ESP-IDF to Arduino framework to simplify maintenance and make updates from EEZ Studio easier. The migration preserves all functionality while making the code more accessible and easier to modify.
+
+### Key Changes
+
+- Switched from ESP-IDF to Arduino framework
+- Replaced ESP-IDF logging with Arduino Serial logging
+- Adapted display and touch drivers to use TFT_eSPI
+- Maintained the same UI structure and functionality
+- Preserved FreeRTOS task management for LVGL
 
 ## Features
 
 - High-performance LVGL graphics library integration
-- Touch screen support
+- Touch screen support with multi-touch capability
 - Double buffering for smooth display updates
 - PSRAM utilization for better performance
-- Black background with large white text display
+- Interactive UI with buttons and sliders
 - Optimized display refresh rates
 
 ## Hardware Requirements
