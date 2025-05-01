@@ -7,6 +7,7 @@
 #include "vars.h"
 #include "styles.h"
 #include "ui.h"
+#include "esp_log.h"
 
 #include <string.h>
 
@@ -86,7 +87,7 @@ void create_screen_main() {
             objects.label_count = obj;
             lv_obj_set_pos(obj, 172, 89);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_label_set_text(obj, "");
+            lv_label_set_text(obj, "0");
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_38, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_color(obj, lv_color_hex(0xfffdfdfd), LV_PART_MAIN | LV_STATE_DEFAULT);
         }
@@ -137,7 +138,16 @@ void tick_screen_main() {
     {
         const char *new_val = get_var_label_count_value();
         const char *cur_val = lv_label_get_text(objects.label_count);
+        
+        // Add debug logging
+        static int debug_counter = 0;
+        if (debug_counter++ % 100 == 0) { // Log every 100 ticks to avoid flooding
+            ESP_LOGI("SCREEN", "tick_screen_main called: new_val=%s, cur_val=%s, label_ptr=%p", 
+                    new_val, cur_val, objects.label_count);
+        }
+        
         if (strcmp(new_val, cur_val) != 0) {
+            ESP_LOGI("SCREEN", "Updating label: new_val=%s, cur_val=%s", new_val, cur_val);
             tick_value_change_obj = objects.label_count;
             lv_label_set_text(objects.label_count, new_val);
             tick_value_change_obj = NULL;

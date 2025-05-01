@@ -22,7 +22,11 @@ void ui_init() {
 
 void ui_tick() {
     eez_flow_tick();
+#if defined(EEZ_FOR_LVGL)
     tick_screen(g_currentScreen);
+#else
+    tick_screen(currentScreen);
+#endif
 }
 
 #else

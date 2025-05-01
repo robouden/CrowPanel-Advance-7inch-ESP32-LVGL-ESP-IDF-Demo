@@ -8,14 +8,16 @@
 
 static const char *TAG = "UI_ACTIONS";
 
-// Forward declaration for the increment function
+// Forward declarations
 extern void increment_label_count();
+extern const char* get_var_label_count_value();
 
 // Action handler for the click counter button
 void action_button_click_action(lv_event_t *e) {
     // Increment counter and update the label
     increment_label_count();
-    ESP_LOGI(TAG, "Button clicked, counter incremented");
+    // Get the current counter value and log it
+    ESP_LOGI(TAG, "Button clicked, counter incremented to: %s", get_var_label_count_value());
 }
 
 // Action handler for the "Put to sleep" button
