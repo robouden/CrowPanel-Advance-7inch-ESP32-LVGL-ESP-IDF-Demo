@@ -22,7 +22,9 @@ void action_button_click_action(lv_event_t *e) {
 
 // Action handler for the "Put to sleep" button
 void action_button_click_action_1(lv_event_t *e) {
-    ESP_LOGI(TAG, "Put to sleep button clicked");
+    static int sleep_button_count = 0;
+    sleep_button_count++;
+    ESP_LOGI(TAG, "Button 2 (Sleep) clicked - Press count: %d", sleep_button_count);
     // Here you would implement sleep functionality if needed
 }
 

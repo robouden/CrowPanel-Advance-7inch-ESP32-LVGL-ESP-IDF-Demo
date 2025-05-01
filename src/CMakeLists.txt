@@ -17,6 +17,8 @@ idf_component_register(
     INCLUDE_DIRS 
         "."
         "ui"
-        "../.pio/libdeps/dev/lvgl/src"
         "display"
 )
+
+# Optional: Set component properties if needed
+# set_component_property(${COMPONENT_LIB} PROPERTY ...)

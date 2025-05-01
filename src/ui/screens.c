@@ -139,13 +139,6 @@ void tick_screen_main() {
         const char *new_val = get_var_label_count_value();
         const char *cur_val = lv_label_get_text(objects.label_count);
         
-        // Add debug logging
-        static int debug_counter = 0;
-        if (debug_counter++ % 100 == 0) { // Log every 100 ticks to avoid flooding
-            ESP_LOGI("SCREEN", "tick_screen_main called: new_val=%s, cur_val=%s, label_ptr=%p", 
-                    new_val, cur_val, objects.label_count);
-        }
-        
         if (strcmp(new_val, cur_val) != 0) {
             ESP_LOGI("SCREEN", "Updating label: new_val=%s, cur_val=%s", new_val, cur_val);
             tick_value_change_obj = objects.label_count;
@@ -171,5 +164,11 @@ tick_screen_func_t tick_screen_funcs[] = {
 };
 
 void tick_screen(int screen_index) {
+    // Check if screen_index is valid
+    if (screen_index < 0 || screen_index >= (int)(sizeof(tick_screen_funcs) / sizeof(tick_screen_funcs[0]))) {
+        ESP_LOGE("SCREEN", "Invalid screen_index: %d", screen_index);
+        return;
+    }
+    
     tick_screen_funcs[screen_index]();
 }

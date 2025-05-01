@@ -20,11 +20,20 @@ void ui_init() {
     eez_flow_init(assets, sizeof(assets), (lv_obj_t **)&objects, sizeof(objects), images, sizeof(images), actions);
 }
 
+#include "esp_log.h"
+
 void ui_tick() {
+    static int debug_counter = 0;
+    if (debug_counter++ % 100 == 0) { // Log every 100 ticks to avoid flooding
+        ESP_LOGI("UI", "ui_tick called");
+    }
+    
     eez_flow_tick();
 #if defined(EEZ_FOR_LVGL)
+    ESP_LOGI("UI", "Using g_currentScreen: %d", g_currentScreen);
     tick_screen(g_currentScreen);
 #else
+    ESP_LOGI("UI", "Using currentScreen: %d", currentScreen);
     tick_screen(currentScreen);
 #endif
 }

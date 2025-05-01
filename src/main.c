@@ -12,6 +12,7 @@
 #include "ui/ui_init.h"
 
 static const char *TAG = "MAIN";
+static const char *LVGL_TASK_TAG = "LVGL_TASK"; // Tag for task logs
 
 extern SemaphoreHandle_t lvgl_mux;
 static QueueHandle_t debug_queue = NULL;
@@ -67,13 +68,17 @@ static void touch_debug_task(void *pvParameters) {
 
 // LVGL update task
 static void lvgl_update_task(void *pvParameters) {
+    ESP_LOGI(LVGL_TASK_TAG, "Task started"); 
     while (1) {
-        // Take the LVGL mutex
-        if (xSemaphoreTake(lvgl_mux, portMAX_DELAY) == pdTRUE) {
-            ui_app_update();  // Update the UI
+        // Try to take the mutex with a timeout
+        if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(50)) == pdTRUE) { 
+            // Call UI update function
+            ui_app_update();
             xSemaphoreGive(lvgl_mux);
+        } else {
+            // Silently continue if we can't get the mutex
         }
-        vTaskDelay(pdMS_TO_TICKS(10));  // 10ms delay
+        vTaskDelay(pdMS_TO_TICKS(10)); 
     }
 }
 
@@ -90,6 +95,11 @@ void app_main(void)
     // Create touch debug task with higher stack size and priority
     xTaskCreatePinnedToCore(touch_debug_task, "touch_debug", 8192, NULL, 2, NULL, 0);
     
-    // Create LVGL update task
-    xTaskCreatePinnedToCore(lvgl_update_task, "lvgl_update", 4096, NULL, 1, NULL, 1);
+    // Create LVGL update task with higher priority than lvgl_port_task
+    BaseType_t lvgl_task_created = xTaskCreatePinnedToCore(lvgl_update_task, "lvgl_update", 8192, NULL, 2, NULL, 1); 
+    if (lvgl_task_created == pdPASS) {
+        ESP_LOGI(TAG, "LVGL update task created successfully");
+    } else {
+        ESP_LOGE(TAG, "Failed to create LVGL update task");
+    }
 }

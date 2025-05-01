@@ -16,6 +16,8 @@
 
 #include "elecrow_advanced_7inch_800x480.h"
 
+#include "esp_timer.h"
+
 #define CONFIG_DOUBLE_FB 1
 
 #if CONFIG_DOUBLE_FB
@@ -53,23 +55,51 @@ static SemaphoreHandle_t touch_mux = NULL;
  */
 void init_display(void)
 {
+    ESP_LOGI(TAG, "init_display started");
     i2c_master_bus_handle_t i2c_handle = NULL;
 
     // Create touch mutex
+    ESP_LOGI(TAG, "Creating touch mutex...");
     touch_mux = xSemaphoreCreateMutex();
     if (touch_mux == NULL) {
         ESP_LOGE(TAG, "Failed to create touch mutex");
         return;
     }
+    ESP_LOGI(TAG, "Touch mutex created.");
 
+    ESP_LOGI(TAG, "Initializing buzzer...");
     init_buzzer();
+    ESP_LOGI(TAG, "Buzzer initialized.");
+
+    ESP_LOGI(TAG, "Initializing I2C...");
     init_i2c(&i2c_handle);
+    ESP_LOGI(TAG, "I2C initialized.");
+
+    ESP_LOGI(TAG, "Initializing I2C expander...");
     init_i2c_expander(i2c_handle, &expander_handle);
+    ESP_LOGI(TAG, "I2C expander initialized.");
+
+    ESP_LOGI(TAG, "Initializing touch...");
     init_touch(i2c_handle, expander_handle, &touch_handle);
+    ESP_LOGI(TAG, "Touch initialized.");
+
+    ESP_LOGI(TAG, "Initializing RTC...");
     init_rtc(i2c_handle, &rtc_handle);
+    ESP_LOGI(TAG, "RTC initialized.");
+
+    ESP_LOGI(TAG, "Initializing LCD...");
     init_lcd(&lcd_handle);
-    init_lvgl(lcd_handle, touch_handle);
+    ESP_LOGI(TAG, "LCD initialized.");
+
+    ESP_LOGI(TAG, "Initializing LVGL...");
+    init_lvgl(lcd_handle, touch_handle); // Creates lvgl_mux inside
+    ESP_LOGI(TAG, "LVGL initialized.");
+
+    ESP_LOGI(TAG, "Initializing backlight...");
     init_backlight(expander_handle);
+    ESP_LOGI(TAG, "Backlight initialized.");
+
+    ESP_LOGI(TAG, "init_display finished");
 }
 
 /**
@@ -319,6 +349,8 @@ void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch
     ESP_LOGI(TAG, "Initialize LVGL library");
     
     lvgl_mux = xSemaphoreCreateMutex();
+    assert(lvgl_mux); // Ensure mutex was created
+    ESP_LOGI(TAG, "LVGL mutex created: handle=%p", (void*)lvgl_mux);
     
     static lv_disp_draw_buf_t disp_buf;
     static lv_disp_drv_t disp_drv;
@@ -361,7 +393,7 @@ void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch
     lv_indev_drv_register(&indev_drv);
     
     ESP_LOGI(TAG, "Start lv_timer_handler task");
-    xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", 4096, NULL, 2, NULL, 1);  // Increased priority
+    xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", 4096, NULL, 1, NULL, 0);  // Lower priority
 }
 
 /**
@@ -471,14 +503,17 @@ static bool on_vsync_event(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel
  */
 static void lvgl_port_task(void *arg)
 {
-    ESP_LOGI(TAG, "Starting LVGL task");
-    while (1) {
-        if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(100)) == pdTRUE) {
+    while (1) { 
+        // Try to take the mutex with a short timeout
+        if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(10)) == pdTRUE) { 
+            // Execute LVGL timer handler
             lv_timer_handler();
             xSemaphoreGive(lvgl_mux);
+        } else {
+            // Silently continue if we can't get the mutex
         }
-        vTaskDelay(pdMS_TO_TICKS(2));  // Reduced from 5ms to 2ms for more frequent updates
-    }
+        vTaskDelay(pdMS_TO_TICKS(50));  // 50ms delay to give other tasks more chance
+    } 
 }
 
 void set_time(uint8_t hours, uint8_t minutes, uint8_t seconds) {

@@ -7,8 +7,13 @@ void ui_app_init(void) {
     ui_init();  // This will create screens and load the main screen
 }
 
+#include "esp_log.h"
+#include "vars.h"
+#include "screens.h"
+
+extern objects_t objects;
+
 void ui_app_update(void) {
-    // Update UI elements periodically
-    lv_timer_handler();
-    ui_tick();  // This will update the current screen
-} 
+    lv_timer_handler(); // This handles LVGL timer events
+    ui_tick(); // Call the main UI tick function
+}
