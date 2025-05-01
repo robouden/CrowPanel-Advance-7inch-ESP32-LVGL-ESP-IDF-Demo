@@ -16,6 +16,15 @@ static const char *TAG = "MAIN";
 extern SemaphoreHandle_t lvgl_mux;
 static QueueHandle_t debug_queue = NULL;
 
+// Function to toggle touch debugging
+void toggle_touch_debug(bool enable) {
+    if (debug_queue != NULL) {
+        uint8_t state = enable ? 1 : 0;
+        xQueueSend(debug_queue, &state, 0);
+        ESP_LOGI(TAG, "Touch debug %s", enable ? "enabled" : "disabled");
+    }
+}
+
 // Task for touch debugging
 static void touch_debug_task(void *pvParameters) {
     // Create queue for touch debug control
@@ -26,7 +35,7 @@ static void touch_debug_task(void *pvParameters) {
         return;
     }
 
-    uint8_t debug_enabled = 1;
+    uint8_t debug_enabled = 0;  // Disabled by default
     uint32_t consecutive_reads = 0;
     const uint32_t MAX_CONSECUTIVE_READS = 50; // Limit consecutive touch reads
 
