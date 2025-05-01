@@ -12,19 +12,17 @@
 #include "lvgl.h"
 #include "esp32_s3.h"
 #include "pca9557.h"
-
+#include "esp_lcd_touch.h"
 
 #include "elecrow_advanced_7inch_800x480.h"
 
-
-#define CONFIG_DOUBLE_FB 0 // Set to 1 for double framebuffer, 0 for single framebuffer
+#define CONFIG_DOUBLE_FB 1
 
 #if CONFIG_DOUBLE_FB
 #define LCD_NUM_FB             2
 #else
 #define LCD_NUM_FB             1
 #endif
-
 
 static const char* TAG = "DISPLAY";
 
@@ -33,6 +31,8 @@ static esp_lcd_panel_handle_t lcd_handle = NULL;
 static pca9557_handle_t expander_handle = NULL;   
 static bm8563_handle_t rtc_handle = NULL;   
 
+// Forward declare the touch interrupt callback with correct type
+static void touch_interrupt_callback(esp_lcd_touch_handle_t tp);
 
 static void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
 static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map);
@@ -43,7 +43,8 @@ SemaphoreHandle_t lvgl_mux;
 SemaphoreHandle_t sem_vsync_end;
 SemaphoreHandle_t sem_gui_ready;
 
-
+// Add at the top with other semaphores
+static SemaphoreHandle_t touch_mux = NULL;
 
 /**
  * @brief Initialize Display
@@ -52,8 +53,14 @@ SemaphoreHandle_t sem_gui_ready;
  */
 void init_display(void)
 {
-
     i2c_master_bus_handle_t i2c_handle = NULL;
+
+    // Create touch mutex
+    touch_mux = xSemaphoreCreateMutex();
+    if (touch_mux == NULL) {
+        ESP_LOGE(TAG, "Failed to create touch mutex");
+        return;
+    }
 
     init_buzzer();
     init_i2c(&i2c_handle);
@@ -63,7 +70,6 @@ void init_display(void)
     init_lcd(&lcd_handle);
     init_lvgl(lcd_handle, touch_handle);
     init_backlight(expander_handle);
-
 }
 
 /**
@@ -161,7 +167,6 @@ void init_rtc(i2c_master_bus_handle_t i2c_bus_handle, bm8563_handle_t *rtc_handl
  * @param[out] touch_handle Pointer to the handle for the initialized touch controller.
  */
 void init_touch(i2c_master_bus_handle_t i2c_bus_handle, pca9557_handle_t expander_handle, esp_lcd_touch_handle_t *touch_handle) {
-
     ESP_LOGI(TAG, "Install Touch driver");
     
     /* Initialize touch */
@@ -179,27 +184,40 @@ void init_touch(i2c_master_bus_handle_t i2c_bus_handle, pca9557_handle_t expande
             .mirror_x = 0,
             .mirror_y = 0,
         },
+        .interrupt_callback = NULL,
+        .user_data = NULL,
     };
-    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
 
-    //const esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
     esp_lcd_panel_io_i2c_config_t tp_io_config = {                                       
         .dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, 
         .scl_speed_hz = I2C_CLK_SPEED_HZ,
         .control_phase_bytes = 1,           
         .dc_bit_offset = 0,                 
         .lcd_cmd_bits = 16,                 
-        .flags =                            
-        {                                   
+        .flags = {                                   
             .disable_control_phase = 1,     
         }                                       
-      };
+    };
 
-      
     ESP_LOGI(TAG, "Create LCD panel IO handle");
     esp_lcd_new_panel_io_i2c_v2(i2c_bus_handle, &tp_io_config, &tp_io_handle);
     ESP_LOGI(TAG, "Create a new GT911 touch driver");
     esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, touch_handle, expander_handle);
+}
+
+// Implement the touch interrupt callback
+static void touch_interrupt_callback(esp_lcd_touch_handle_t tp)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    
+    // Read touch data immediately when interrupt occurs
+    esp_lcd_touch_read_data(tp);
+    
+    // Notify the LVGL task to process the touch data
+    if (xHigherPriorityTaskWoken) {
+        portYIELD_FROM_ISR();
+    }
 }
 
 
@@ -316,9 +334,9 @@ void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch
         lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * LCD_V_RES);
     #else
         ESP_LOGI(TAG, "Allocate separate LVGL draw buffers from PSRAM");
-        buf1 = heap_caps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);  // Increased from 10 to 40 lines
-        buf2 = heap_caps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);  // Added second buffer
-        lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * 40);  // Using both buffers
+        buf1 = heap_caps_malloc(LCD_H_RES * 100 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);  // Increased to 100 lines
+        buf2 = heap_caps_malloc(LCD_H_RES * 100 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);  // Increased to 100 lines
+        lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * 100);  // Using both buffers with 100 lines
     #endif 
 
     ESP_LOGI(TAG, "Register display driver to LVGL");
@@ -330,7 +348,7 @@ void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch
     disp_drv.user_data = panel_handle;
     disp_drv.monitor_cb = NULL;  // Disable performance monitoring
     #if CONFIG_DOUBLE_FB
-        disp_drv.full_refresh = true;
+        disp_drv.full_refresh = true;  // Enable full refresh for double buffering
     #endif
     lv_disp_drv_register(&disp_drv);
     
@@ -356,25 +374,35 @@ void init_lvgl(esp_lcd_panel_handle_t panel_handle, esp_lcd_touch_handle_t touch
  */
 static void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
 {
-
     esp_lcd_touch_handle_t touch_handle = (esp_lcd_touch_handle_t)indev_driver->user_data;
+    if (touch_handle == NULL) {
+        ESP_LOGE(TAG, "Touch handle is NULL in touchpad_read");
+        return;
+    }
 
-    uint16_t touchpad_x;
-    uint16_t touchpad_y;
-    uint16_t touch_strength;
+    uint16_t touchpad_x = 0;
+    uint16_t touchpad_y = 0;
+    uint16_t touch_strength = 0;
     uint8_t touch_cnt = 0;
 
     data->state = LV_INDEV_STATE_REL;
 
-    esp_lcd_touch_read_data(touch_handle);
-    bool touchpad_pressed = esp_lcd_touch_get_coordinates(touch_handle, &touchpad_x, &touchpad_y, &touch_strength, &touch_cnt, 1);
-    if (touchpad_pressed) {
-        //ESP_LOGI(TAG, "Touchpad_read %d %d", touchpad_x, touchpad_y);
-        data->state = LV_INDEV_STATE_PR;
+    if (xSemaphoreTake(touch_mux, pdMS_TO_TICKS(10)) == pdTRUE) {
+        esp_err_t ret = esp_lcd_touch_read_data(touch_handle);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to read touch data: %d", ret);
+            xSemaphoreGive(touch_mux);
+            return;
+        }
 
-        /*Set the coordinates*/
-        data->point.x = touchpad_x;
-        data->point.y = touchpad_y;
+        bool touchpad_pressed = esp_lcd_touch_get_coordinates(touch_handle, &touchpad_x, &touchpad_y, &touch_strength, &touch_cnt, 1);
+        if (touchpad_pressed && touch_cnt > 0) {
+            ESP_LOGI(TAG, "Touch: x=%d, y=%d, strength=%d, count=%d", touchpad_x, touchpad_y, touch_strength, touch_cnt);
+            data->state = LV_INDEV_STATE_PR;
+            data->point.x = touchpad_x;
+            data->point.y = touchpad_y;
+        }
+        xSemaphoreGive(touch_mux);
     }
 }
 
@@ -400,7 +428,7 @@ static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
     // LVGL has finished
     xSemaphoreGive(sem_gui_ready);
     // Now wait for the VSYNC event with timeout
-    if (xSemaphoreTake(sem_vsync_end, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(sem_vsync_end, pdMS_TO_TICKS(50)) == pdTRUE) {  // Reduced timeout from 100ms to 50ms
         esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
     }
     lv_disp_flush_ready(drv);
@@ -450,7 +478,7 @@ static void lvgl_port_task(void *arg)
             lv_timer_handler();
             xSemaphoreGive(lvgl_mux);
         }
-        vTaskDelay(pdMS_TO_TICKS(5));  // Reduced from 10 to 5ms for smoother updates
+        vTaskDelay(pdMS_TO_TICKS(2));  // Reduced from 5ms to 2ms for more frequent updates
     }
 }
 
@@ -492,4 +520,40 @@ esp_err_t get_time(uint8_t *hours, uint8_t *minutes, uint8_t *seconds) {
     *seconds = current_time.tm_sec;
 
     return ESP_OK;
+}
+
+void debug_touch_info(void) {
+    if (touch_handle == NULL) {
+        ESP_LOGE(TAG, "Touch handle is NULL!");
+        return;
+    }
+
+    if (xSemaphoreTake(touch_mux, pdMS_TO_TICKS(10)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to get touch mutex for debug");
+        return;
+    }
+
+    uint16_t x[CONFIG_ESP_LCD_TOUCH_MAX_POINTS] = {0};
+    uint16_t y[CONFIG_ESP_LCD_TOUCH_MAX_POINTS] = {0};
+    uint16_t strength[CONFIG_ESP_LCD_TOUCH_MAX_POINTS] = {0};
+    uint8_t count = 0;
+
+    esp_err_t ret = esp_lcd_touch_read_data(touch_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read touch data in debug: %d", ret);
+        xSemaphoreGive(touch_mux);
+        return;
+    }
+    
+    if (esp_lcd_touch_get_coordinates(touch_handle, x, y, strength, &count, CONFIG_ESP_LCD_TOUCH_MAX_POINTS)) {
+        if (count > 0 && count <= CONFIG_ESP_LCD_TOUCH_MAX_POINTS) {
+            printf("Touch Debug Info:\n");
+            printf("Number of touch points: %d\n", count);
+            for (int i = 0; i < count; i++) {
+                printf("Point %d: x=%d, y=%d, strength=%d\n", i, x[i], y[i], strength[i]);
+            }
+        }
+    }
+
+    xSemaphoreGive(touch_mux);
 }

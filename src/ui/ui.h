@@ -7,22 +7,19 @@
 #define _SQUARELINE_PROJECT_UI_H
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 #include "lvgl.h"
 
-// #include "ui_helpers.h"
-// #include "ui_events.h"
+    extern lv_obj_t *ui____initial_actions0;
 
+    // FONTS
+    LV_FONT_DECLARE(ui_font_Digital48);
 
-extern lv_obj_t * ui____initial_actions0;
-
-// FONTS
-LV_FONT_DECLARE(ui_font_Digital48);
-
-// UI INIT
-void ui_init(void);
+    // UI INIT
+    void ui_init(void);
 
 #ifdef __cplusplus
 } /*extern "C"*/

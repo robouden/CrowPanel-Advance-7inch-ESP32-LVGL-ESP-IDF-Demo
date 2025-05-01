@@ -41,6 +41,9 @@ void set_time(uint8_t hours, uint8_t minutes, uint8_t seconds);
 
 esp_err_t get_time(uint8_t *hours, uint8_t *minutes, uint8_t *seconds);
 
+// Debug function for touch testing
+void debug_touch_info(void);
+
 #ifdef __cplusplus
 }
 #endif
