@@ -39,12 +39,8 @@ GT911 touch;
 static lv_indev_drv_t indev_drv;
 static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data);
 
-// Mutex for LVGL
-SemaphoreHandle_t lvgl_mux = NULL;
-
-// LVGL update task
-TaskHandle_t lvgl_task_handle = NULL;
-void lvgl_update_task(void *pvParameters);
+// Mutex for LVGL (defined in esp32_s3_arduino.cpp)
+extern SemaphoreHandle_t lvgl_mux;
 
 // Display flush callback for I2C display
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
@@ -73,21 +69,6 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
     }
 }
 
-// LVGL update task
-void lvgl_update_task(void *pvParameters) {
-    Serial.println("LVGL update task started");
-    
-    while (1) {
-        // Try to take the mutex with a timeout
-        if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(50)) == pdTRUE) { 
-            // Call GUI update function using our Arduino implementation
-            gui_update();
-            xSemaphoreGive(lvgl_mux);
-        }
-        vTaskDelay(pdMS_TO_TICKS(10)); 
-    }
-}
-
 void setup() {
     // Initialize serial communication
     Serial.begin(115200);
@@ -108,36 +89,6 @@ void setup() {
     Serial.println("Initializing display and touch...");
     // Initialize display and touch using our Arduino implementation
     display_init();
-    touch_init();
-    // Set initial brightness
-    set_display_brightness(100);
-    
-    // Initialize LVGL
-    lv_init();
-    
-    // Allocate display buffer (use PSRAM if available)
-    #if defined(BOARD_HAS_PSRAM)
-        Serial.println("Using PSRAM for display buffer");
-        disp_draw_buf = (lv_color_t *)ps_malloc(SCREEN_WIDTH * 40 * sizeof(lv_color_t));
-    #else
-        disp_draw_buf = (lv_color_t *)malloc(SCREEN_WIDTH * 40 * sizeof(lv_color_t));
-    #endif
-    
-    if (disp_draw_buf == NULL) {
-        Serial.println("Display buffer allocation failed!");
-        while (1);
-    }
-    
-    // Initialize display buffer
-    lv_disp_draw_buf_init(&draw_buf, disp_draw_buf, NULL, SCREEN_WIDTH * 40);
-    
-    // Initialize display driver
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = SCREEN_WIDTH;
-    disp_drv.ver_res = SCREEN_HEIGHT;
-    disp_drv.flush_cb = my_disp_flush;
-    disp_drv.draw_buf = &draw_buf;
-    lv_disp_drv_register(&disp_drv);
     
     // Initialize touch input device
     lv_indev_drv_init(&indev_drv);
@@ -145,43 +96,14 @@ void setup() {
     indev_drv.read_cb = touchpad_read;
     lv_indev_drv_register(&indev_drv);
     
-    // Create mutex for LVGL
-    lvgl_mux = xSemaphoreCreateMutex();
-    if (lvgl_mux == NULL) {
-        Serial.println("Failed to create LVGL mutex!");
-        while (1);
-    }
-    
     // Initialize GUI using our Arduino implementation
     gui_init();
     
     Serial.println("Display and UI initialized");
-    
-    // Create LVGL update task with higher priority than LVGL timer task
-    xTaskCreatePinnedToCore(
-        lvgl_update_task,
-        "lvgl_update",
-        8192,
-        NULL,
-        2,
-        &lvgl_task_handle,
-        1
-    );
-    
-    if (lvgl_task_handle == NULL) {
-        Serial.println("Failed to create LVGL update task!");
-    } else {
-        Serial.println("LVGL update task created successfully");
-    }
 }
 
 void loop() {
-    // LVGL timer handler task
-    if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(10)) == pdTRUE) {
-        lv_timer_handler();
-        xSemaphoreGive(lvgl_mux);
-    }
-    
-    // Delay to prevent watchdog timeout
-    delay(5);
+    // The main LVGL work is done in the lvgl_task
+    // Keep this loop empty to avoid conflicts
+    delay(1000);
 }

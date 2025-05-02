@@ -2,9 +2,35 @@
 #include <lvgl.h>
 #include <Wire.h>
 #include "pins.h"
+#include "elecrow_advanced_7inch_800x480.h"
+#include "esp_lcd_panel_rgb.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_panel_vendor.h"
 
-// Arduino implementation of the ESP-IDF display driver functions
-// This replaces the ESP-IDF specific esp32_s3.c file
+static esp_lcd_panel_handle_t panel_handle = NULL;
+static TaskHandle_t lvgl_task_handle = NULL;
+
+// Define the LVGL mutex
+SemaphoreHandle_t lvgl_mux = NULL;
+
+// LVGL update task
+static void lvgl_task(void *pvParameters) {
+    Serial.println("LVGL task started");
+    
+    while (1) {
+        // Take mutex to access LVGL
+        if (xSemaphoreTake(lvgl_mux, pdMS_TO_TICKS(100)) == pdTRUE) {
+            // Update LVGL timer
+            lv_timer_handler();
+            
+            // Release mutex
+            xSemaphoreGive(lvgl_mux);
+        }
+        
+        // Small delay between updates (20ms = 50Hz refresh rate)
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
 
 // Display I2C address (this is a placeholder - you need to check the actual address)
 #define DISPLAY_I2C_ADDR 0x38
@@ -19,7 +45,7 @@
 #define DISPLAY_REG_DATA       0x10
 
 // Function to write a command to the display
-bool display_write_cmd(uint8_t reg, uint8_t* data, size_t len) {
+static bool display_write_cmd(uint8_t reg, uint8_t* data, size_t len) {
     Wire.beginTransmission(DISPLAY_I2C_ADDR);
     Wire.write(reg);
     for (size_t i = 0; i < len; i++) {
@@ -29,7 +55,7 @@ bool display_write_cmd(uint8_t reg, uint8_t* data, size_t len) {
 }
 
 // Function to read data from the display
-bool display_read_data(uint8_t reg, uint8_t* data, size_t len) {
+static bool display_read_data(uint8_t reg, uint8_t* data, size_t len) {
     Wire.beginTransmission(DISPLAY_I2C_ADDR);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) {
@@ -48,34 +74,148 @@ bool display_read_data(uint8_t reg, uint8_t* data, size_t len) {
     return true;
 }
 
+// LVGL flush callback
+static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map) {
+    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)drv->user_data;
+    int offsetx1 = area->x1;
+    int offsetx2 = area->x2;
+    int offsety1 = area->y1;
+    int offsety2 = area->y2;
+    
+    // Pass the flush command to the panel
+    esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+    
+    // Notify LVGL that the flush is done
+    lv_disp_flush_ready(drv);
+}
+
+extern "C" {
+
+// Function to set display brightness
+void set_display_brightness(uint8_t brightness) {
+    Serial.printf("Setting display brightness to %d%%\n", brightness);
+    // Note: This display doesn't have brightness control
+}
+
 // Function to initialize the display
 void display_init() {
-    Serial.println("Initializing display using Arduino framework");
-    
-    // Check if display is responsive
-    Wire.beginTransmission(DISPLAY_I2C_ADDR);
-    bool displayFound = (Wire.endTransmission() == 0);
-    
-    if (displayFound) {
-        Serial.println("Display found at I2C address 0x" + String(DISPLAY_I2C_ADDR, HEX));
-        
-        // Initialize display - these commands would be specific to your display controller
-        // This is a placeholder implementation
-        uint8_t powerOn = 0x01;
-        if (display_write_cmd(DISPLAY_REG_POWER, &powerOn, 1)) {
-            Serial.println("Display power on command sent successfully");
-        } else {
-            Serial.println("Failed to send display power on command");
-        }
-        
-        // Set initial brightness
-        set_display_brightness(100);
-        
-        Serial.println("Display initialization complete");
-    } else {
-        Serial.println("Display not found at I2C address 0x" + String(DISPLAY_I2C_ADDR, HEX));
-        Serial.println("Please check connections and I2C address");
+    Serial.println("Initializing RGB LCD panel");
+
+    // Configure RGB timing parameters
+    esp_lcd_rgb_panel_config_t panel_config = {};
+    panel_config.clk_src = LCD_CLK_SRC_PLL160M;
+    panel_config.timings.pclk_hz = LCD_PIXEL_CLOCK_HZ;
+    panel_config.timings.h_res = LCD_H_RES;
+    panel_config.timings.v_res = LCD_V_RES;
+    panel_config.timings.hsync_pulse_width = HSYNC_PULSE_WIDTH;
+    panel_config.timings.hsync_back_porch = HSYNC_BACK_PORCH;
+    panel_config.timings.hsync_front_porch = HSYNC_FRONT_PORCH;
+    panel_config.timings.vsync_pulse_width = VSYNC_PULSE_WIDTH;
+    panel_config.timings.vsync_back_porch = VSYNC_BACK_PORCH;
+    panel_config.timings.vsync_front_porch = VSYNC_FRONT_PORCH;
+    panel_config.timings.flags.pclk_active_neg = true;
+    panel_config.data_width = 16; // RGB565
+    panel_config.psram_trans_align = 64;
+    panel_config.hsync_gpio_num = PIN_NUM_HSYNC;
+    panel_config.vsync_gpio_num = PIN_NUM_VSYNC;
+    panel_config.de_gpio_num = PIN_NUM_DE;
+    panel_config.pclk_gpio_num = PIN_NUM_PCLK;
+    panel_config.data_gpio_nums[0] = PIN_NUM_DATA0;
+    panel_config.data_gpio_nums[1] = PIN_NUM_DATA1;
+    panel_config.data_gpio_nums[2] = PIN_NUM_DATA2;
+    panel_config.data_gpio_nums[3] = PIN_NUM_DATA3;
+    panel_config.data_gpio_nums[4] = PIN_NUM_DATA4;
+    panel_config.data_gpio_nums[5] = PIN_NUM_DATA5;
+    panel_config.data_gpio_nums[6] = PIN_NUM_DATA6;
+    panel_config.data_gpio_nums[7] = PIN_NUM_DATA7;
+    panel_config.data_gpio_nums[8] = PIN_NUM_DATA8;
+    panel_config.data_gpio_nums[9] = PIN_NUM_DATA9;
+    panel_config.data_gpio_nums[10] = PIN_NUM_DATA10;
+    panel_config.data_gpio_nums[11] = PIN_NUM_DATA11;
+    panel_config.data_gpio_nums[12] = PIN_NUM_DATA12;
+    panel_config.data_gpio_nums[13] = PIN_NUM_DATA13;
+    panel_config.data_gpio_nums[14] = PIN_NUM_DATA14;
+    panel_config.data_gpio_nums[15] = PIN_NUM_DATA15;
+    panel_config.disp_gpio_num = PIN_NUM_DISP_EN;
+    panel_config.on_frame_trans_done = NULL;
+    panel_config.flags.fb_in_psram = true;
+
+    // Initialize RGB LCD panel
+    esp_err_t ret = esp_lcd_new_rgb_panel(&panel_config, &panel_handle);
+    if (ret != ESP_OK) {
+        Serial.println("Failed to initialize RGB LCD panel");
+        return;
     }
+
+    // Reset and initialize panel
+    ret = esp_lcd_panel_reset(panel_handle);
+    if (ret != ESP_OK) {
+        Serial.println("Failed to reset panel");
+        return;
+    }
+
+    ret = esp_lcd_panel_init(panel_handle);
+    if (ret != ESP_OK) {
+        Serial.println("Failed to initialize panel");
+        return;
+    }
+
+    // Initialize LVGL
+    lv_init();
+
+    // Allocate display buffer (use PSRAM if available)
+    #if defined(BOARD_HAS_PSRAM)
+        Serial.println("Using PSRAM for display buffer");
+        lv_color_t *buf1 = (lv_color_t *)ps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
+        lv_color_t *buf2 = (lv_color_t *)ps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
+    #else
+        lv_color_t *buf1 = (lv_color_t *)malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
+        lv_color_t *buf2 = (lv_color_t *)malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
+    #endif
+
+    if (!buf1 || !buf2) {
+        Serial.println("Display buffer allocation failed!");
+        return;
+    }
+
+    // Initialize display buffer
+    static lv_disp_draw_buf_t draw_buf;
+    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, LCD_H_RES * 40);
+
+    // Initialize display driver
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = LCD_H_RES;
+    disp_drv.ver_res = LCD_V_RES;
+    disp_drv.flush_cb = lvgl_flush_cb;
+    disp_drv.draw_buf = &draw_buf;
+    disp_drv.user_data = panel_handle;
+    lv_disp_drv_register(&disp_drv);
+
+    // Create mutex for LVGL
+    lvgl_mux = xSemaphoreCreateMutex();
+    if (!lvgl_mux) {
+        Serial.println("Failed to create LVGL mutex!");
+        return;
+    }
+
+    // Create LVGL task
+    xTaskCreatePinnedToCore(
+        lvgl_task,
+        "lvgl",
+        8192,
+        NULL,
+        2,
+        &lvgl_task_handle,
+        1
+    );
+
+    if (!lvgl_task_handle) {
+        Serial.println("Failed to create LVGL task!");
+        return;
+    }
+
+    Serial.println("RGB LCD panel initialized successfully");
 }
 
 // Function to initialize the touch controller
@@ -84,93 +224,35 @@ void touch_init() {
     // Touch controller is initialized separately in main.cpp using GT911 class
 }
 
-// Function to set display brightness
-void set_display_brightness(uint8_t brightness) {
-    Serial.printf("Setting display brightness to %d%%\n", brightness);
-    
-    uint8_t brightnessValue = map(brightness, 0, 100, 0, 255);
-    if (display_write_cmd(DISPLAY_REG_BRIGHTNESS, &brightnessValue, 1)) {
-        Serial.println("Brightness set successfully");
-    } else {
-        Serial.println("Failed to set brightness");
-    }
-}
-
 // Function to turn display on/off
 void set_display_power(bool on) {
     Serial.printf("Setting display power %s\n", on ? "ON" : "OFF");
-    
-    uint8_t powerState = on ? 0x01 : 0x00;
-    if (display_write_cmd(DISPLAY_REG_POWER, &powerState, 1)) {
-        Serial.println("Power state set successfully");
-    } else {
-        Serial.println("Failed to set power state");
+    if (panel_handle) {
+        esp_lcd_panel_disp_on_off(panel_handle, on);
     }
 }
 
 // Function to get display power state
 bool get_display_power() {
-    uint8_t powerState = 0;
-    if (display_read_data(DISPLAY_REG_POWER, &powerState, 1)) {
-        return (powerState != 0);
-    }
-    return true; // Default to on if read fails
+    return true; // Always return true as we can't read the power state
 }
 
 // Function to set the display window for drawing
 bool set_display_window(uint16_t x, uint16_t y, uint16_t width, uint16_t height) {
-    uint8_t data[8];
-    
-    // X position (2 bytes)
-    data[0] = x >> 8;
-    data[1] = x & 0xFF;
-    if (!display_write_cmd(DISPLAY_REG_WINDOW_X, data, 2)) {
-        return false;
+    if (panel_handle) {
+        esp_err_t ret = esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + width, y + height, NULL);
+        return (ret == ESP_OK);
     }
-    
-    // Y position (2 bytes)
-    data[0] = y >> 8;
-    data[1] = y & 0xFF;
-    if (!display_write_cmd(DISPLAY_REG_WINDOW_Y, data, 2)) {
-        return false;
-    }
-    
-    // Width (2 bytes)
-    data[0] = width >> 8;
-    data[1] = width & 0xFF;
-    if (!display_write_cmd(DISPLAY_REG_WINDOW_W, data, 2)) {
-        return false;
-    }
-    
-    // Height (2 bytes)
-    data[0] = height >> 8;
-    data[1] = height & 0xFF;
-    if (!display_write_cmd(DISPLAY_REG_WINDOW_H, data, 2)) {
-        return false;
-    }
-    
-    return true;
+    return false;
 }
 
 // Function to write pixel data to the display
 bool write_display_data(const uint8_t* data, size_t len) {
-    // For large data transfers, we need to break it into chunks
-    // I2C has a buffer size limit (typically 32 bytes)
-    const size_t maxChunkSize = 30; // Leave room for register address
-    
-    for (size_t offset = 0; offset < len; offset += maxChunkSize) {
-        size_t chunkSize = min(maxChunkSize, len - offset);
-        
-        Wire.beginTransmission(DISPLAY_I2C_ADDR);
-        Wire.write(DISPLAY_REG_DATA);
-        for (size_t i = 0; i < chunkSize; i++) {
-            Wire.write(data[offset + i]);
-        }
-        
-        if (Wire.endTransmission() != 0) {
-            return false;
-        }
+    if (panel_handle) {
+        // Note: The actual data writing is handled by LVGL's flush callback
+        return true;
     }
-    
-    return true;
+    return false;
 }
+
+} // extern "C"
