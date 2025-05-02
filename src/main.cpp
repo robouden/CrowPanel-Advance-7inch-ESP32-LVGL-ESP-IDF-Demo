@@ -4,120 +4,141 @@
  */
 
 #include <Arduino.h>
-#include <lvgl.h>
 #include <Wire.h>
-
-// Include UI files
-#include "ui/generated/src/ui/ui.h"
-#include "ui/generated/src/ui/screens.h"
-#include "ui/generated/src/ui/vars.h"
-#include "ui/generated/src/ui/actions.h"
-#include "touch/GT911.h"
+#include <SPI.h>
+#include <lvgl.h>
 #include "display/pins.h"
 #include "display/esp32_s3_arduino.h"
-#include "gui/gui_arduino.h"
-#include "display/elecrow_advanced_7inch_800x480.h"
+#include "touch/GT911.h"
 
+// Debug flag
+#define DEBUG_ENABLED 1
+
+// I2C Addresses
+#define PCA9557_ADDR 0x18
+#define BM8563_ADDR 0x51
+#define GT911_ADDR 0x5D
+
+// Function declarations
+static void init_i2c(void);
+static bool check_i2c_device(uint8_t addr);
+static void init_peripherals(void);
+static void lvgl_task(void *pvParameters);
+
+// Global objects
 GT911 touch = GT911();
-bool touch_debug_enabled = true;
 
 void setup() {
-    // Initialize serial communication
+    // Initialize serial and wait for connection
     Serial.begin(115200);
-    delay(1000); // Give serial time to initialize
+    delay(1000);
     
-    Serial.println("\n\nCrowPanel Advance 7\" ESP32-S3 LVGL Demo - Arduino Version");
+    Serial.println("\nCrowPanel Advance 7\" ESP32-S3 LVGL Demo - Arduino Version");
     Serial.println("Build: " __DATE__ " " __TIME__);
-    
-    // Initialize PSRAM
+
+    // Initialize PSRAM first
     if (psramInit()) {
         Serial.println("PSRAM initialized successfully");
         Serial.printf("Total PSRAM: %d bytes\n", ESP.getPsramSize());
         Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
     } else {
         Serial.println("PSRAM initialization failed!");
-        while(1) delay(100); // Stop here if PSRAM fails
+        while(1) delay(100);
     }
 
-    // Initialize I2C for touch controller
-    Serial.println("Initializing I2C...");
-    Wire.begin(I2C_SDA, I2C_SCL);
-    Wire.setClock(TOUCH_I2C_FREQ);
-    delay(100); // Give I2C time to stabilize
+    // Initialize I2C with proper delays
+    init_i2c();
     
-    Serial.println("Initializing touch controller...");
-    if (touch.begin()) {
-        Serial.println("GT911 touch controller initialized successfully");
-        
-        // Configure touch controller
-        touch.setRotation(ROTATION_NORMAL);
-        touch.setResolution(LCD_H_RES, LCD_V_RES);
-        Serial.println("Touch configuration complete");
-    } else {
-        Serial.println("Failed to initialize GT911 touch controller!");
-        // Continue anyway as display might still work
-    }
-
+    // Initialize peripherals
+    init_peripherals();
+    
     // Initialize display
-    Serial.println("Initializing display...");
     init_display();
-    delay(100); // Give display time to initialize
     
-    // Initialize LVGL
-    Serial.println("Initializing LVGL...");
-    lv_init();
-    
-    // Create LVGL update task
-    Serial.println("Creating LVGL task...");
+    // Create LVGL task
     xTaskCreatePinnedToCore(
-        display_task,
+        lvgl_task,
         "lvgl",
-        8192, // Increased stack size
+        8192,
         NULL,
         2,
         NULL,
         1
     );
     
-    // Initialize the UI
-    Serial.println("Initializing UI...");
-    ui_init(); // This will call create_screens() internally
-    Serial.println("UI initialization complete");
-
-    // Final status
     Serial.println("Setup complete!");
-    Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
-    Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
 }
 
 void loop() {
-    static uint32_t last_print = 0;
-    static uint32_t frame_count = 0;
-    frame_count++;
-    
-    // Update touch data
-    if (touch.available()) {
-        if (touch_debug_enabled) {
-            // Print touch debug information every second
-            if (millis() - last_print > 1000) {
-                Serial.printf("Touch points: %d\n", touch.getTouchPoints());
-                for (uint8_t i = 0; i < touch.getTouchPoints(); i++) {
-                    TouchPoint point = touch.getPoint(i);
-                    Serial.printf("Point %d - X: %d, Y: %d, Size: %d\n", 
-                        i + 1,
-                        point.x,
-                        point.y,
-                        point.size
-                    );
-                }
-                // Print frame statistics
-                Serial.printf("Frames last second: %d\n", frame_count);
-                frame_count = 0;
-                last_print = millis();
-            }
-        }
-    }
+    // Keep the loop empty as LVGL runs in its own task
+    delay(1000);
+}
 
-    // Small delay to prevent watchdog reset
-    delay(5);
+static void init_i2c(void) {
+    Serial.println("Initializing I2C...");
+    
+    // Reset I2C pins to input mode first
+    pinMode(I2C_SDA, INPUT);
+    pinMode(I2C_SCL, INPUT);
+    delay(100);
+    
+    // Start I2C with internal pullups
+    Wire.begin(I2C_SDA, I2C_SCL, 100000);
+    delay(100);
+    
+    // Check for I2C devices
+    Serial.println("Scanning I2C devices...");
+    if (check_i2c_device(PCA9557_ADDR)) {
+        Serial.println("PCA9557 I/O expander found");
+    } else {
+        Serial.println("PCA9557 I/O expander not found!");
+    }
+    
+    if (check_i2c_device(BM8563_ADDR)) {
+        Serial.println("BM8563 RTC found");
+    } else {
+        Serial.println("BM8563 RTC not found!");
+    }
+    
+    if (check_i2c_device(GT911_ADDR)) {
+        Serial.println("GT911 touch controller found");
+    } else {
+        Serial.println("GT911 touch controller not found!");
+    }
+}
+
+static bool check_i2c_device(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return (Wire.endTransmission() == 0);
+}
+
+static void init_peripherals(void) {
+    Serial.println("Initializing peripherals...");
+    
+    // Initialize PCA9557 first (I/O expander)
+    Wire.beginTransmission(PCA9557_ADDR);
+    Wire.write(0x03); // Configuration register
+    Wire.write(0x00); // Set all pins as outputs
+    if (Wire.endTransmission() != 0) {
+        Serial.println("Failed to configure PCA9557!");
+    }
+    delay(100);
+    
+    // Initialize touch controller
+    if (touch.begin()) {
+        Serial.println("GT911 touch controller initialized successfully");
+        touch.setRotation(ROTATION_NORMAL);
+        touch.setResolution(LCD_H_RES, LCD_V_RES);
+    } else {
+        Serial.println("Failed to initialize GT911 touch controller!");
+    }
+    delay(100);
+}
+
+static void lvgl_task(void *pvParameters) {
+    while (1) {
+        // Handle LVGL tasks
+        lv_timer_handler();
+        delay(5);
+    }
 }
