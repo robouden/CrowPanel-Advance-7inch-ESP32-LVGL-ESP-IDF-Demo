@@ -3,118 +3,114 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include "../display/pins.h"
 
-// GT911 I2C address
-#define GT911_ADDR1 0x5D
-#define GT911_ADDR2 0x14
+#define GT911_ADDR 0x5D
+#define GT911_MAX_TOUCH_POINTS 5
 
-// GT911 registers
-#define GT911_REG_STATUS    0x814E
-#define GT911_REG_POINT1    0x8150
-#define GT911_REG_POINT2    0x8158
-#define GT911_REG_POINT3    0x8160
-#define GT911_REG_POINT4    0x8168
-#define GT911_REG_POINT5    0x8170
-#define GT911_REG_ID        0x8140
-#define GT911_REG_RESET     0x8040
-
-// GT911 touch point structure
-typedef struct {
-    uint8_t status;     // 0x80: touch down, 0x00: touch up
-    uint16_t x;         // X coordinate
-    uint16_t y;         // Y coordinate
-    uint16_t size;      // Touch size
-    uint8_t reserved;   // Reserved
-} gt911_touch_point_t;
+struct TouchPoint {
+    uint16_t x;
+    uint16_t y;
+    uint16_t size;
+    uint8_t trackId;
+};
 
 class GT911 {
 public:
-    GT911(uint8_t addr = GT911_ADDR1, TwoWire *wire = &Wire) : _addr(addr), _wire(wire) {}
-
+    GT911(uint8_t addr = GT911_ADDR) : _addr(addr) {}
+    
     bool begin() {
-        _wire->beginTransmission(_addr);
-        bool result = (_wire->endTransmission() == 0);
-        if (!result) {
-            // Try alternate address
-            _addr = (_addr == GT911_ADDR1) ? GT911_ADDR2 : GT911_ADDR1;
-            _wire->beginTransmission(_addr);
-            result = (_wire->endTransmission() == 0);
+        Wire.beginTransmission(_addr);
+        bool success = (Wire.endTransmission() == 0);
+        if (success) {
+            // Reset touch configuration
+            setResolution(LCD_H_RES, LCD_V_RES);
+            _rotation = ROTATION_NORMAL;
         }
-        return result;
+        return success;
     }
-
-    bool readTouchPoints(gt911_touch_point_t *points, uint8_t *count) {
-        uint8_t status = 0;
-        
-        // Read touch status
-        if (!readRegister(GT911_REG_STATUS, &status, 1)) {
-            return false;
+    
+    bool available() {
+        Wire.beginTransmission(_addr);
+        Wire.write(0x81);  // Status register
+        Wire.endTransmission(false);
+        Wire.requestFrom(_addr, (uint8_t)1);
+        if (Wire.available()) {
+            uint8_t status = Wire.read();
+            return (status & 0x80) != 0;  // Buffer status bit
         }
-        
-        // Number of touch points (0-5)
-        *count = status & 0x0F;
-        if (*count == 0) {
-            return true;
+        return false;
+    }
+    
+    uint8_t getTouchPoints() {
+        Wire.beginTransmission(_addr);
+        Wire.write(0x81);  // Status register
+        Wire.endTransmission(false);
+        Wire.requestFrom(_addr, (uint8_t)1);
+        if (Wire.available()) {
+            uint8_t touches = Wire.read() & 0x0F;  // Number of touch points
+            return touches > GT911_MAX_TOUCH_POINTS ? 0 : touches;
         }
+        return 0;
+    }
+    
+    TouchPoint getPoint(uint8_t index) {
+        TouchPoint point = {0, 0, 0, 0};
+        if (index >= GT911_MAX_TOUCH_POINTS) return point;
         
-        // Read touch points
-        for (uint8_t i = 0; i < *count && i < 5; i++) {
-            uint8_t data[8];
-            uint16_t reg = GT911_REG_POINT1 + (i * 8);
+        Wire.beginTransmission(_addr);
+        Wire.write(0x84 + (index * 8));  // Touch point data registers
+        Wire.endTransmission(false);
+        Wire.requestFrom(_addr, (uint8_t)7);
+        
+        if (Wire.available() >= 7) {
+            uint16_t x = Wire.read() | (Wire.read() << 8);
+            uint16_t y = Wire.read() | (Wire.read() << 8);
+            uint16_t size = Wire.read() | (Wire.read() << 8);
+            uint8_t id = Wire.read();
             
-            if (!readRegister(reg, data, 8)) {
-                return false;
+            // Apply rotation if needed
+            switch (_rotation) {
+                case ROTATION_90:
+                    point.x = y;
+                    point.y = LCD_H_RES - x;
+                    break;
+                case ROTATION_180:
+                    point.x = LCD_H_RES - x;
+                    point.y = LCD_V_RES - y;
+                    break;
+                case ROTATION_270:
+                    point.x = LCD_V_RES - y;
+                    point.y = x;
+                    break;
+                default:  // ROTATION_NORMAL
+                    point.x = x;
+                    point.y = y;
+                    break;
             }
-            
-            points[i].status = data[0];
-            points[i].x = (data[2] << 8) | data[1];
-            points[i].y = (data[4] << 8) | data[3];
-            points[i].size = (data[6] << 8) | data[5];
-            points[i].reserved = data[7];
+            point.size = size;
+            point.trackId = id;
         }
-        
-        // Clear status register
-        uint8_t clear = 0;
-        writeRegister(GT911_REG_STATUS, &clear, 1);
-        
-        return true;
+        return point;
+    }
+    
+    void setRotation(uint8_t rotation) {
+        _rotation = rotation % 4;
+    }
+    
+    void setResolution(uint16_t width, uint16_t height) {
+        Wire.beginTransmission(_addr);
+        Wire.write(0x8048);  // Resolution registers
+        Wire.write(width & 0xFF);
+        Wire.write((width >> 8) & 0xFF);
+        Wire.write(height & 0xFF);
+        Wire.write((height >> 8) & 0xFF);
+        Wire.endTransmission();
     }
 
 private:
     uint8_t _addr;
-    TwoWire *_wire;
-
-    bool readRegister(uint16_t reg, uint8_t *data, uint8_t len) {
-        _wire->beginTransmission(_addr);
-        _wire->write(reg >> 8);        // High byte
-        _wire->write(reg & 0xFF);      // Low byte
-        if (_wire->endTransmission(false) != 0) {
-            return false;
-        }
-        
-        _wire->requestFrom(_addr, len);
-        if (_wire->available() != len) {
-            return false;
-        }
-        
-        for (uint8_t i = 0; i < len; i++) {
-            data[i] = _wire->read();
-        }
-        
-        return true;
-    }
-
-    bool writeRegister(uint16_t reg, uint8_t *data, uint8_t len) {
-        _wire->beginTransmission(_addr);
-        _wire->write(reg >> 8);        // High byte
-        _wire->write(reg & 0xFF);      // Low byte
-        
-        for (uint8_t i = 0; i < len; i++) {
-            _wire->write(data[i]);
-        }
-        
-        return (_wire->endTransmission() == 0);
-    }
+    uint8_t _rotation;
 };
 
 #endif // GT911_H

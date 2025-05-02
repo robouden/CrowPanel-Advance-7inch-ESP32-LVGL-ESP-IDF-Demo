@@ -8,102 +8,116 @@
 #include <Wire.h>
 
 // Include UI files
-#include "ui/ui.h"
-#include "ui/ui_init.h"
-#include "ui/vars.h"
-#include "ui/actions.h"
+#include "ui/generated/src/ui/ui.h"
+#include "ui/generated/src/ui/screens.h"
+#include "ui/generated/src/ui/vars.h"
+#include "ui/generated/src/ui/actions.h"
 #include "touch/GT911.h"
 #include "display/pins.h"
 #include "display/esp32_s3_arduino.h"
 #include "gui/gui_arduino.h"
+#include "display/elecrow_advanced_7inch_800x480.h"
 
-// Display definitions
-#define SCREEN_WIDTH  800
-#define SCREEN_HEIGHT 480
-
-// I2C addresses for display and touch
-#define DISPLAY_I2C_ADDR 0x38
-
-// TFT instance
-// TFT_eSPI tft = TFT_eSPI();
-
-// LVGL display buffer
-static lv_disp_draw_buf_t draw_buf;
-static lv_color_t *disp_draw_buf;
-static lv_disp_drv_t disp_drv;
-
-// Touch controller
-GT911 touch;
-
-// Touch variables
-static lv_indev_drv_t indev_drv;
-static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data);
-
-// Mutex for LVGL (defined in esp32_s3_arduino.cpp)
-extern SemaphoreHandle_t lvgl_mux;
-
-// Display flush callback for I2C display
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
-    uint32_t w = (area->x2 - area->x1 + 1);
-    uint32_t h = (area->y2 - area->y1 + 1);
-    
-    // For I2C display, we would need to send the pixel data via I2C
-    // This is a simplified implementation and would need to be adapted to your specific display
-    
-    // Signal to LVGL that the flushing is done
-    lv_disp_flush_ready(disp);
-}
-
-// Read touch points using GT911 controller
-static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
-    gt911_touch_point_t points[5];
-    uint8_t count = 0;
-    
-    if (touch.readTouchPoints(points, &count) && count > 0) {
-        // Use the first touch point
-        data->state = LV_INDEV_STATE_PR;
-        data->point.x = points[0].x;
-        data->point.y = points[0].y;
-    } else {
-        data->state = LV_INDEV_STATE_REL;
-    }
-}
+GT911 touch = GT911();
+bool touch_debug_enabled = true;
 
 void setup() {
     // Initialize serial communication
     Serial.begin(115200);
-    Serial.println("CrowPanel Advance 7\" ESP32-S3 LVGL Demo - Arduino Version");
+    delay(1000); // Give serial time to initialize
     
-    // Initialize I2C with pins from elecrow_advanced_7inch_800x480.h
+    Serial.println("\n\nCrowPanel Advance 7\" ESP32-S3 LVGL Demo - Arduino Version");
+    Serial.println("Build: " __DATE__ " " __TIME__);
+    
+    // Initialize PSRAM
+    if (psramInit()) {
+        Serial.println("PSRAM initialized successfully");
+        Serial.printf("Total PSRAM: %d bytes\n", ESP.getPsramSize());
+        Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
+    } else {
+        Serial.println("PSRAM initialization failed!");
+        while(1) delay(100); // Stop here if PSRAM fails
+    }
+
+    // Initialize I2C for touch controller
+    Serial.println("Initializing I2C...");
     Wire.begin(I2C_SDA, I2C_SCL);
-    Wire.setClock(400000); // Set I2C clock to 400kHz for faster communication
+    Wire.setClock(TOUCH_I2C_FREQ);
+    delay(100); // Give I2C time to stabilize
     
     Serial.println("Initializing touch controller...");
     if (touch.begin()) {
         Serial.println("GT911 touch controller initialized successfully");
+        
+        // Configure touch controller
+        touch.setRotation(ROTATION_NORMAL);
+        touch.setResolution(LCD_H_RES, LCD_V_RES);
+        Serial.println("Touch configuration complete");
     } else {
         Serial.println("Failed to initialize GT911 touch controller!");
-        // Continue anyway, as we might still want to use the display without touch
+        // Continue anyway as display might still work
     }
+
+    // Initialize display
+    Serial.println("Initializing display...");
+    init_display();
+    delay(100); // Give display time to initialize
     
-    Serial.println("Initializing display and touch...");
-    // Initialize display and touch using our Arduino implementation
-    display_init();
+    // Initialize LVGL
+    Serial.println("Initializing LVGL...");
+    lv_init();
     
-    // Initialize touch input device
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb = touchpad_read;
-    lv_indev_drv_register(&indev_drv);
+    // Create LVGL update task
+    Serial.println("Creating LVGL task...");
+    xTaskCreatePinnedToCore(
+        display_task,
+        "lvgl",
+        8192, // Increased stack size
+        NULL,
+        2,
+        NULL,
+        1
+    );
     
-    // Initialize GUI using our Arduino implementation
-    gui_init();
-    
-    Serial.println("Display and UI initialized");
+    // Initialize the UI
+    Serial.println("Initializing UI...");
+    ui_init(); // This will call create_screens() internally
+    Serial.println("UI initialization complete");
+
+    // Final status
+    Serial.println("Setup complete!");
+    Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
 }
 
 void loop() {
-    // The main LVGL work is done in the lvgl_task
-    // Keep this loop empty to avoid conflicts
-    delay(1000);
+    static uint32_t last_print = 0;
+    static uint32_t frame_count = 0;
+    frame_count++;
+    
+    // Update touch data
+    if (touch.available()) {
+        if (touch_debug_enabled) {
+            // Print touch debug information every second
+            if (millis() - last_print > 1000) {
+                Serial.printf("Touch points: %d\n", touch.getTouchPoints());
+                for (uint8_t i = 0; i < touch.getTouchPoints(); i++) {
+                    TouchPoint point = touch.getPoint(i);
+                    Serial.printf("Point %d - X: %d, Y: %d, Size: %d\n", 
+                        i + 1,
+                        point.x,
+                        point.y,
+                        point.size
+                    );
+                }
+                // Print frame statistics
+                Serial.printf("Frames last second: %d\n", frame_count);
+                frame_count = 0;
+                last_print = millis();
+            }
+        }
+    }
+
+    // Small delay to prevent watchdog reset
+    delay(5);
 }

@@ -92,6 +92,10 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Display and UI initialized");
 
+    // Enable touch debugging by default
+    toggle_touch_debug(true);
+    ESP_LOGI(TAG, "Touch debugging enabled");
+
     // Create touch debug task with higher stack size and priority
     xTaskCreatePinnedToCore(touch_debug_task, "touch_debug", 8192, NULL, 2, NULL, 0);
     

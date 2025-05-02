@@ -13,6 +13,8 @@
 #include "esp32_s3.h"
 #include "pca9557.h"
 #include "esp_lcd_touch.h"
+#include "esp_lcd_touch_gt911.h"
+#include "display/display_config.h"
 
 #include "elecrow_advanced_7inch_800x480.h"
 
@@ -199,24 +201,22 @@ void init_rtc(i2c_master_bus_handle_t i2c_bus_handle, bm8563_handle_t *rtc_handl
 void init_touch(i2c_master_bus_handle_t i2c_bus_handle, pca9557_handle_t expander_handle, esp_lcd_touch_handle_t *touch_handle) {
     ESP_LOGI(TAG, "Initialize GT911 touch controller");
 
-    // Configure touch I2C
-    i2c_config_t i2c_conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = TOUCH_I2C_SDA,
-        .scl_io_num = TOUCH_I2C_SCL,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = TOUCH_I2C_FREQ,
+    // Configure touch interrupt GPIO
+    gpio_config_t touch_gpio_conf = {
+        .pin_bit_mask = (1ULL << TOUCH_INT_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,
     };
-    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &i2c_conf));
-    ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
+    ESP_ERROR_CHECK(gpio_config(&touch_gpio_conf));
 
     // GT911 touch controller configuration
     esp_lcd_touch_config_t tp_cfg = {
         .x_max = LCD_H_RES,
         .y_max = LCD_V_RES,
-        .rst_gpio_num = GPIO_NUM_NC, // No hardware reset pin
-        .int_gpio_num = GPIO_NUM_NC, // No interrupt pin
+        .rst_gpio_num = TOUCH_RST_GPIO,
+        .int_gpio_num = TOUCH_INT_GPIO,
         .levels = {
             .reset = 0,
             .interrupt = 0,
@@ -226,9 +226,10 @@ void init_touch(i2c_master_bus_handle_t i2c_bus_handle, pca9557_handle_t expande
             .mirror_x = 0,
             .mirror_y = 0,
         },
+        .interrupt_callback = touch_interrupt_callback,
     };
 
-    // Initialize GT911
+    // Initialize I2C communication for touch
     esp_lcd_panel_io_i2c_config_t tp_io_cfg = {
         .dev_addr = TOUCH_I2C_ADDR,
         .control_phase_bytes = 1,
@@ -243,7 +244,18 @@ void init_touch(i2c_master_bus_handle_t i2c_bus_handle, pca9557_handle_t expande
     
     esp_lcd_panel_io_handle_t tp_io_handle = NULL;
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)i2c_bus_handle, &tp_io_cfg, &tp_io_handle));
-    ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, touch_handle));
+    
+    // Create touch handle with expander
+    ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, touch_handle, expander_handle));
+
+    // Initialize touch mutex if not already created
+    if (touch_mux == NULL) {
+        touch_mux = xSemaphoreCreateMutex();
+        if (touch_mux == NULL) {
+            ESP_LOGE(TAG, "Failed to create touch mutex");
+            return;
+        }
+    }
 
     ESP_LOGI(TAG, "Touch controller initialized successfully");
 }
@@ -302,7 +314,6 @@ void init_lcd(esp_lcd_panel_handle_t *panel_handle) {
             PIN_NUM_DATA15
         },
         .disp_gpio_num = PIN_NUM_DISP_EN,
-        .on_frame_trans_done = NULL,
         .flags = {
             .fb_in_psram = true,
             .double_fb = true,
@@ -403,19 +414,46 @@ static void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
     static uint16_t x, y;
     static bool touched;
     
-    if (xSemaphoreTake(touch_mux, pdMS_TO_TICKS(100)) == pdTRUE) {
-        esp_lcd_touch_read_data(*touch_handle);
+    if (touch_handle == NULL) {
+        data->state = LV_INDEV_STATE_REL;
+        return;
+    }
+    
+    if (xSemaphoreTake(touch_mux, pdMS_TO_TICKS(10)) == pdTRUE) {
+        esp_lcd_touch_read_data(touch_handle);
         
-        if (esp_lcd_touch_get_coordinates(*touch_handle, &x, &y, 1, &touched) == ESP_OK) {
-            if (touched) {
-                data->point.x = x;
-                data->point.y = y;
-                data->state = LV_INDEV_STATE_PR;
-            } else {
-                data->state = LV_INDEV_STATE_REL;
-            }
+        uint16_t touch_x[1];
+        uint16_t touch_y[1];
+        uint8_t touch_cnt = 0;
+        
+        esp_lcd_touch_get_coordinates(touch_handle, touch_x, touch_y, NULL, &touch_cnt, 1);
+        
+        if (touch_cnt > 0) {
+            // Apply any necessary calibration/transformation
+            x = touch_x[0];
+            y = touch_y[0];
+            
+            // Ensure coordinates are within bounds
+            x = (x < TOUCH_CALIB_X_MIN) ? TOUCH_CALIB_X_MIN : 
+                (x > TOUCH_CALIB_X_MAX) ? TOUCH_CALIB_X_MAX : x;
+            y = (y < TOUCH_CALIB_Y_MIN) ? TOUCH_CALIB_Y_MIN : 
+                (y > TOUCH_CALIB_Y_MAX) ? TOUCH_CALIB_Y_MAX : y;
+                
+            data->point.x = x;
+            data->point.y = y;
+            data->state = LV_INDEV_STATE_PR;
+            
+            ESP_LOGD(TAG, "Touch: x=%d, y=%d", x, y);
+        } else {
+            data->state = LV_INDEV_STATE_REL;
         }
+        
         xSemaphoreGive(touch_mux);
+    } else {
+        // If we can't get the mutex, use the last known state
+        data->point.x = x;
+        data->point.y = y;
+        data->state = LV_INDEV_STATE_REL;
     }
 }
 
@@ -541,19 +579,24 @@ void debug_touch_info(void) {
 
     esp_err_t ret = esp_lcd_touch_read_data(touch_handle);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to read touch data in debug: %d", ret);
+        ESP_LOGW(TAG, "Failed to read touch data in debug: %d (%s)", ret, esp_err_to_name(ret));
         xSemaphoreGive(touch_mux);
         return;
     }
     
-    if (esp_lcd_touch_get_coordinates(touch_handle, x, y, strength, &count, CONFIG_ESP_LCD_TOUCH_MAX_POINTS)) {
+    bool touched = esp_lcd_touch_get_coordinates(touch_handle, x, y, strength, &count, CONFIG_ESP_LCD_TOUCH_MAX_POINTS);
+    if (touched) {
         if (count > 0 && count <= CONFIG_ESP_LCD_TOUCH_MAX_POINTS) {
-            printf("Touch Debug Info:\n");
-            printf("Number of touch points: %d\n", count);
+            ESP_LOGI(TAG, "--------------------");
+            ESP_LOGI(TAG, "Touch Debug Info:");
+            ESP_LOGI(TAG, "Number of touch points: %d", count);
             for (int i = 0; i < count; i++) {
-                printf("Point %d: x=%d, y=%d, strength=%d\n", i, x[i], y[i], strength[i]);
+                ESP_LOGI(TAG, "Point %d: x=%d, y=%d, strength=%d", i+1, x[i], y[i], strength[i]);
             }
+            ESP_LOGI(TAG, "--------------------");
         }
+    } else {
+        ESP_LOGD(TAG, "No touch detected");
     }
 
     xSemaphoreGive(touch_mux);

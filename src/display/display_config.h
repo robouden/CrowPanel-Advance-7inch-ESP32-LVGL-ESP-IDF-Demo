@@ -48,8 +48,17 @@
 // Touch Configuration
 #define TOUCH_I2C_SCL          GPIO_NUM_16
 #define TOUCH_I2C_SDA          GPIO_NUM_15
+#define TOUCH_INT_GPIO         GPIO_NUM_7
+#define TOUCH_RST_GPIO         GPIO_NUM_NC  // No dedicated reset pin, handled by PCA9557
 #define TOUCH_I2C_FREQ         400000
 #define TOUCH_I2C_ADDR         0x5D    // GT911 address
+#define TOUCH_READ_INTERVAL_MS 20      // Touch read interval
+
+// Touch Calibration (if needed)
+#define TOUCH_CALIB_X_MIN      0
+#define TOUCH_CALIB_X_MAX      LCD_H_RES
+#define TOUCH_CALIB_Y_MIN      0
+#define TOUCH_CALIB_Y_MAX      LCD_V_RES
 
 // Display Buffer Configuration
 #define DISP_BUF_SIZE          (LCD_H_RES * 40)
