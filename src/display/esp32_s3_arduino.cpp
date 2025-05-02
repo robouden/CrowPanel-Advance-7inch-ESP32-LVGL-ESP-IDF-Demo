@@ -104,7 +104,7 @@ void set_display_brightness(uint8_t brightness) {
 void init_display(void) {
     Serial.println("Initializing display...");
 
-    // Allocate display buffers from PSRAM
+    // Step 1: Allocate display buffers from PSRAM
     Serial.println("Allocating display buffers from PSRAM...");
     buf1 = (lv_color_t *)ps_malloc(LCD_H_RES * 100 * sizeof(lv_color_t));
     buf2 = (lv_color_t *)ps_malloc(LCD_H_RES * 100 * sizeof(lv_color_t));
@@ -115,26 +115,16 @@ void init_display(void) {
     }
     Serial.println("Display buffers allocated successfully");
 
-    // Initialize LVGL display buffer
+    // Step 2: Initialize LVGL
+    Serial.println("Initializing LVGL...");
+    lv_init();
+    
+    // Step 3: Initialize LVGL display buffer
     Serial.println("Initializing LVGL display buffer...");
     lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * 100);
 
-    // Initialize LVGL
-    Serial.println("Initializing LVGL...");
-    lv_init();
-
-    // Register display driver
-    Serial.println("Registering display driver...");
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = LCD_H_RES;
-    disp_drv.ver_res = LCD_V_RES;
-    disp_drv.flush_cb = display_flush_cb;
-    disp_drv.draw_buf = &disp_buf;
-    disp_drv.user_data = NULL;
-    lv_disp_drv_register(&disp_drv);
-
-    // Initialize RGB LCD panel
-    Serial.println("Initializing RGB LCD panel...");
+    // Step 4: Configure RGB LCD panel
+    Serial.println("Configuring RGB LCD panel...");
     esp_lcd_rgb_panel_config_t panel_config;
     memset(&panel_config, 0, sizeof(panel_config));
 
@@ -149,7 +139,7 @@ void init_display(void) {
     panel_config.timings.vsync_back_porch = VSYNC_BACK_PORCH;
     panel_config.timings.vsync_front_porch = VSYNC_FRONT_PORCH;
     panel_config.timings.flags.pclk_active_neg = true;
-
+    
     panel_config.data_width = 16; // RGB565
     panel_config.psram_trans_align = 64;
     panel_config.hsync_gpio_num = PIN_NUM_HSYNC;
@@ -172,32 +162,52 @@ void init_display(void) {
     panel_config.data_gpio_nums[13] = PIN_NUM_DATA13;
     panel_config.data_gpio_nums[14] = PIN_NUM_DATA14;
     panel_config.data_gpio_nums[15] = PIN_NUM_DATA15;
-    panel_config.flags.fb_in_psram = true;
 
-    // Create RGB LCD panel
-    Serial.println("Creating RGB LCD panel...");
+    // Step 5: Initialize RGB LCD panel
+    Serial.println("Initializing RGB LCD panel...");
     esp_err_t ret = esp_lcd_new_rgb_panel(&panel_config, &panel_handle);
     if (ret != ESP_OK) {
-        Serial.printf("Failed to create LCD panel! Error: %d\n", ret);
+        Serial.printf("Failed to initialize RGB LCD panel: %d\n", ret);
         return;
     }
 
+    // Step 6: Reset panel
     Serial.println("Resetting LCD panel...");
     ret = esp_lcd_panel_reset(panel_handle);
     if (ret != ESP_OK) {
-        Serial.printf("Failed to reset LCD panel! Error: %d\n", ret);
+        Serial.printf("Failed to reset panel: %d\n", ret);
         return;
     }
+    delay(100); // Wait for reset to complete
 
+    // Step 7: Initialize panel
     Serial.println("Initializing LCD panel...");
     ret = esp_lcd_panel_init(panel_handle);
     if (ret != ESP_OK) {
-        Serial.printf("Failed to initialize LCD panel! Error: %d\n", ret);
+        Serial.printf("Failed to initialize panel: %d\n", ret);
+        return;
+    }
+    delay(100); // Wait for initialization to complete
+
+    // Step 8: Turn on display
+    Serial.println("Turning on display...");
+    ret = esp_lcd_panel_disp_on_off(panel_handle, true);
+    if (ret != ESP_OK) {
+        Serial.printf("Failed to turn on display: %d\n", ret);
         return;
     }
 
-    // Create mutex for LVGL
-    Serial.println("Creating LVGL mutex...");
+    // Step 9: Register display driver
+    Serial.println("Registering display driver...");
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = LCD_H_RES;
+    disp_drv.ver_res = LCD_V_RES;
+    disp_drv.flush_cb = display_flush_cb;
+    disp_drv.draw_buf = &disp_buf;
+    disp_drv.user_data = NULL;
+    lv_disp_drv_register(&disp_drv);
+
+    // Create LVGL mutex
     lvgl_mux = xSemaphoreCreateMutex();
     if (!lvgl_mux) {
         Serial.println("Failed to create LVGL mutex!");

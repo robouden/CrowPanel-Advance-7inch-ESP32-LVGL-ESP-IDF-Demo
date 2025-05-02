@@ -9,6 +9,7 @@
 #include <lvgl.h>
 #include "display/pins.h"
 #include "display/esp32_s3_arduino.h"
+#include "display/buzzer.h"
 #include "touch/GT911.h"
 
 // Debug flag
@@ -44,6 +45,16 @@ void setup() {
     } else {
         Serial.println("PSRAM initialization failed!");
         while(1) delay(100);
+    }
+
+    // Initialize buzzer first and turn it off
+    Serial.println("Initializing buzzer...");
+    esp_err_t ret = buzzer_init((gpio_num_t)BUZZER_GPIO, BUZZER_LEDC_TIMER, BUZZER_LEDC_CHANNEL);
+    if (ret != ESP_OK) {
+        Serial.println("Failed to initialize buzzer!");
+    } else {
+        buzzer_stop();
+        Serial.println("Buzzer initialized and stopped");
     }
 
     // Initialize I2C with proper delays
@@ -127,7 +138,7 @@ static void init_peripherals(void) {
     // Initialize touch controller
     if (touch.begin()) {
         Serial.println("GT911 touch controller initialized successfully");
-        touch.setRotation(ROTATION_NORMAL);
+        touch.setRotation(TOUCH_ROTATION_NORMAL);
         touch.setResolution(LCD_H_RES, LCD_V_RES);
     } else {
         Serial.println("Failed to initialize GT911 touch controller!");
