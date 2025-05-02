@@ -99,8 +99,7 @@ void set_display_brightness(uint8_t brightness) {
 
 // Function to initialize the display
 void display_init() {
-    Serial.println("Initializing RGB LCD panel");
-
+    Serial.println("[display_init] Initializing RGB LCD panel");
     // Configure RGB timing parameters
     esp_lcd_rgb_panel_config_t panel_config = {};
     panel_config.clk_src = LCD_CLK_SRC_PLL160M;
@@ -140,49 +139,52 @@ void display_init() {
     panel_config.on_frame_trans_done = NULL;
     panel_config.flags.fb_in_psram = true;
 
-    // Initialize RGB LCD panel
+    Serial.println("[display_init] Calling esp_lcd_new_rgb_panel()");
     esp_err_t ret = esp_lcd_new_rgb_panel(&panel_config, &panel_handle);
+    Serial.printf("[display_init] esp_lcd_new_rgb_panel returned: %d\n", ret);
     if (ret != ESP_OK) {
-        Serial.println("Failed to initialize RGB LCD panel");
+        Serial.println("[display_init] Failed to initialize RGB LCD panel");
         return;
     }
 
-    // Reset and initialize panel
+    Serial.println("[display_init] Calling esp_lcd_panel_reset()");
     ret = esp_lcd_panel_reset(panel_handle);
+    Serial.printf("[display_init] esp_lcd_panel_reset returned: %d\n", ret);
     if (ret != ESP_OK) {
-        Serial.println("Failed to reset panel");
+        Serial.println("[display_init] Failed to reset panel");
         return;
     }
 
+    Serial.println("[display_init] Calling esp_lcd_panel_init()");
     ret = esp_lcd_panel_init(panel_handle);
+    Serial.printf("[display_init] esp_lcd_panel_init returned: %d\n", ret);
     if (ret != ESP_OK) {
-        Serial.println("Failed to initialize panel");
+        Serial.println("[display_init] Failed to initialize panel");
         return;
     }
 
-    // Initialize LVGL
+    Serial.println("[display_init] Calling lv_init()");
     lv_init();
 
     // Allocate display buffer (use PSRAM if available)
+    Serial.println("[display_init] Allocating display buffer (100 lines)");
     #if defined(BOARD_HAS_PSRAM)
-        Serial.println("Using PSRAM for display buffer");
-        lv_color_t *buf1 = (lv_color_t *)ps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
-        lv_color_t *buf2 = (lv_color_t *)ps_malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
+        lv_color_t *buf1 = (lv_color_t *)ps_malloc(LCD_H_RES * 100 * sizeof(lv_color_t));
+        lv_color_t *buf2 = (lv_color_t *)ps_malloc(LCD_H_RES * 100 * sizeof(lv_color_t));
     #else
-        lv_color_t *buf1 = (lv_color_t *)malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
-        lv_color_t *buf2 = (lv_color_t *)malloc(LCD_H_RES * 40 * sizeof(lv_color_t));
+        lv_color_t *buf1 = (lv_color_t *)malloc(LCD_H_RES * 100 * sizeof(lv_color_t));
+        lv_color_t *buf2 = (lv_color_t *)malloc(LCD_H_RES * 100 * sizeof(lv_color_t));
     #endif
 
     if (!buf1 || !buf2) {
-        Serial.println("Display buffer allocation failed!");
+        Serial.println("[display_init] Display buffer allocation failed!");
         return;
     }
 
-    // Initialize display buffer
     static lv_disp_draw_buf_t draw_buf;
-    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, LCD_H_RES * 40);
+    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, LCD_H_RES * 100);
+    Serial.println("[display_init] LVGL display buffer initialized");
 
-    // Initialize display driver
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
     disp_drv.hor_res = LCD_H_RES;
@@ -191,15 +193,15 @@ void display_init() {
     disp_drv.draw_buf = &draw_buf;
     disp_drv.user_data = panel_handle;
     lv_disp_drv_register(&disp_drv);
+    Serial.println("[display_init] LVGL display driver registered");
 
-    // Create mutex for LVGL
     lvgl_mux = xSemaphoreCreateMutex();
     if (!lvgl_mux) {
-        Serial.println("Failed to create LVGL mutex!");
+        Serial.println("[display_init] Failed to create LVGL mutex!");
         return;
     }
+    Serial.println("[display_init] LVGL mutex created");
 
-    // Create LVGL task
     xTaskCreatePinnedToCore(
         lvgl_task,
         "lvgl",
@@ -209,13 +211,13 @@ void display_init() {
         &lvgl_task_handle,
         1
     );
-
     if (!lvgl_task_handle) {
-        Serial.println("Failed to create LVGL task!");
+        Serial.println("[display_init] Failed to create LVGL task!");
         return;
     }
+    Serial.println("[display_init] LVGL task created");
 
-    Serial.println("RGB LCD panel initialized successfully");
+    Serial.println("[display_init] RGB LCD panel initialized successfully");
 }
 
 // Function to initialize the touch controller
